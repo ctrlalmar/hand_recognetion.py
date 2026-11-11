@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Surgical AR HUD</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#071217;--glass:rgba(10,28,36,.58);--line:rgba(143,211,232,.28);--scrub:#8fd3e8;--text:#e8f4f8;--mute:#8aa6b0;--coral:#ff8a80;--sky:#7cc4ff}
+*{box-sizing:border-box}[hidden]{display:none!important}
+html,body{margin:0;height:100%;overflow:hidden;background:#05090c;color:var(--text);font:500 15px/1.4 Barlow,system-ui,sans-serif}
+#cam,#gl,#fx{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+#cam{object-fit:cover;transform:scaleX(-1);z-index:0}#gl{z-index:1}#fx{z-index:2}
+#frame{position:fixed;inset:14px;border:1px solid var(--line);border-radius:30px;box-shadow:inset 0 0 130px rgba(7,18,23,.8);z-index:3;pointer-events:none}
+.ui{pointer-events:auto}
+button{font:inherit;color:var(--text);background:rgba(143,211,232,.12);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer}
+button:hover{background:rgba(143,211,232,.28)}button:focus-visible,input:focus-visible{outline:2px solid var(--scrub);outline-offset:2px}
+#chips{position:fixed;top:30px;left:50%;transform:translateX(-50%);display:flex;gap:10px;z-index:4;pointer-events:none;flex-wrap:wrap;justify-content:center;width:90%}
+#chips span{background:var(--glass);border:1px solid var(--line);border-radius:99px;padding:3px 14px;backdrop-filter:blur(8px);font-size:13px}
+#toast{position:fixed;bottom:34px;left:50%;transform:translateX(-50%);z-index:6;background:var(--glass);border:1px solid var(--line);border-radius:10px;padding:8px 18px;backdrop-filter:blur(8px);opacity:0;transition:opacity .25s;pointer-events:none}
+#toast.on{opacity:1}
+#quick{position:fixed;left:34px;bottom:34px;z-index:5;display:flex;flex-direction:column;gap:8px;background:var(--glass);border:1px solid var(--line);border-radius:14px;padding:12px;backdrop-filter:blur(8px);max-width:240px}
+#quick p{margin:0;color:var(--mute);font-size:13px}#quick div{display:flex;flex-wrap:wrap;gap:6px}
+#vit{position:fixed;z-index:5;width:270px;background:var(--glass);border:1px solid var(--line);border-radius:16px;backdrop-filter:blur(10px);transform-origin:top left;transform:scale(var(--s,1));user-select:none}
+#vit .bar{display:flex;justify-content:space-between;align-items:center;padding:8px 10px 8px 16px;border-bottom:1px solid var(--line);cursor:grab;touch-action:none}
+#vit .bar button{padding:2px 9px;margin-left:4px}
+#vit.sel{border-color:var(--scrub);box-shadow:0 0 0 2px rgba(143,211,232,.45),0 0 30px rgba(143,211,232,.35)}
+#vit dl{margin:0;padding:12px 16px 16px;display:grid;gap:12px}
+#vit dl div{display:flex;justify-content:space-between;align-items:baseline}
+#vit dt{color:var(--mute)}#vit dd{margin:0;font:600 34px 'Barlow Condensed',sans-serif;font-variant-numeric:tabular-nums}
+#vit small{font:500 14px Barlow,sans-serif;color:var(--mute);margin-left:4px}
+#setup{position:fixed;inset:0;z-index:10;display:grid;place-items:center;background:radial-gradient(circle at 30% 20%,#12303b,#05090c 70%)}
+#setup .card{width:min(640px,92vw);background:rgba(10,28,36,.85);border:1px solid var(--line);border-radius:20px;padding:30px}
+#setup h1{margin:0 0 6px;font:600 30px 'Barlow Condensed',sans-serif;letter-spacing:.01em}
+#setup p{margin:0 0 18px;color:var(--mute)}
+.row{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:center;margin-bottom:8px}
+.row .fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute)}
+input[type=text]{width:100%;background:rgba(0,0,0,.3);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit}
+.acts{display:flex;gap:10px;margin:16px 0 22px;flex-wrap:wrap}
+#start{width:100%;padding:13px;font-size:17px;background:var(--scrub);color:#06222c;border-color:var(--scrub);font-weight:600}
+#start:hover{background:#b3e4f2}#msg{color:var(--coral);min-height:20px;margin:0 0 8px}.fine{margin:14px 0 0!important;font-size:12px}
+</style></head><body>
+ 
+<section id="setup"><div class="card">
+ <h1>Pre-surgery setup</h1>
+ <p>Upload organ models (.glb) and set the phrase you will say after "show" to bring each one up.</p>
+ <div id="list"></div>
+ <div class="acts">
+  <button id="add">Add .glb files</button><button id="demo">Use demo organs</button>
+  <input id="file" type="file" accept=".glb" multiple hidden>
+ </div>
+ <p id="msg"></p>
+ <button id="start">Start surgery mode</button>
+ <p class="fine">Prototype for demonstration only. Not a medical device.</p>
+</div></section>
+ 
+<video id="cam" playsinline muted></video><canvas id="gl"></canvas><canvas id="fx"></canvas>
+<div id="hud" hidden>
+ <div id="frame"></div>
+ <div id="chips"><span id="hands">Starting camera</span><span id="mic">Voice off</span><span id="lock">Organ unlocked</span></div>
+ <aside id="vit" class="ui">
+  <div class="bar"><span>Patient vitals</span><span><button id="sm" aria-label="Smaller">&minus;</button><button id="lg" aria-label="Bigger">+</button><button id="cl" aria-label="Close">&times;</button></span></div>
+  <dl><div><dt>Heart rate</dt><dd style="color:var(--coral)">--<small>BPM</small></dd></div>
+  <div><dt>SpO2</dt><dd style="color:var(--sky)">--<small>%</small></dd></div>
+  <div><dt>Blood pressure</dt><dd>--/--<small>mmHg</small></dd></div></dl>
+ </aside>
+ <div id="quick" class="ui"><p>Mouse fallback: drag to move, wheel to zoom.</p><div id="qo"></div><div id="qL"></div>
+  <div><button id="qh">Hide organ</button><button id="qv">Vitals</button><button id="ql">Lock</button></div></div>
+</div>
+<div id="toast"></div>
+ 
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+const $=s=>document.querySelector(s), dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y), clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const organs=[], cache=new Map(), st={x:0,y:0,s:1,lock:false,cur:null};
+let W,H,grab=null,zoom=null,md=null,pd=null,rot=null,fT=null,fD=false,vs=1;
+const ps=[false,false],pu=[false,false],tq=new THREE.Quaternion(),PURSE_ON=.3,PURSE_OFF=.45; // raise PURSE_ON if the purse gesture is not detected
+ 
+/* ---------- setup modal ---------- */
+function renderList(){const l=$('#list');l.innerHTML='';organs.forEach((o,i)=>{const r=document.createElement('div');r.className='row';
+ r.innerHTML='<span class="fn"></span><input type="text" aria-label="Voice keyword"><button>Remove</button>';
+ r.querySelector('.fn').textContent=o.name;const inp=r.querySelector('input');inp.value=o.label;inp.oninput=()=>o.label=inp.value;
+ r.querySelector('button').onclick=()=>{organs.splice(i,1);renderList()};l.append(r)})}
+$('#add').onclick=()=>$('#file').click();
+$('#file').onchange=async e=>{for(const f of e.target.files)organs.push({name:f.name,label:f.name.replace(/\.glb$/i,'').replace(/[-_]+/g,' '),buf:await f.arrayBuffer()});e.target.value='';renderList()};
+$('#demo').onclick=()=>{['heart','liver','kidney','tumor'].forEach(k=>organs.push({name:'Demo '+k,label:k,demo:k}));renderList()};
+$('#start').onclick=async()=>{
+ if(!organs.length){$('#msg').textContent='Add at least one .glb file, or use the demo organs.';return}
+ $('#msg').textContent='';$('#setup').hidden=true;$('#hud').hidden=false;
+ const v=$('#vit');v.style.left=Math.max(20,W-310)+'px';v.style.top='90px';
+ $('#qo').innerHTML='';organs.forEach(o=>{const b=document.createElement('button');b.textContent=o.label;b.onclick=()=>show(o);$('#qo').append(b)});
+ startVoice();await startCam()};
+ 
+/* ---------- three.js ---------- */
+const renderer=new THREE.WebGLRenderer({canvas:$('#gl'),alpha:true,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(50,1,.1,50);cam.position.z=6;
+scene.add(new THREE.HemisphereLight(0xffffff,0x223344,1.8));const dl=new THREE.DirectionalLight(0xffffff,2.2);dl.position.set(2,3,4);scene.add(dl);
+const holder=new THREE.Group();holder.visible=false;scene.add(holder);
+const wpp=()=>2*Math.tan(THREE.MathUtils.degToRad(25))*6/H; // world units per pixel
+function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H,false);cam.aspect=W/H;cam.updateProjectionMatrix();$('#fx').width=W;$('#fx').height=H}
+addEventListener('resize',resize);resize();st.x=W/2;st.y=H/2;
+const mat=(c,o)=>new THREE.MeshPhysicalMaterial({color:c,roughness:.4,clearcoat:.6,clearcoatRoughness:.3,...o});
+function blob(sc,seed,amp,{tp=0,bend=0,seg=72}={}){const g=new THREE.SphereGeometry(1,seg,Math.round(seg*.7)),p=g.attributes.position,v=new THREE.Vector3(),n=new THREE.Vector3();
+ for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i);n.copy(v);
+  const d=amp*(Math.sin(n.x*3.1+seed)*Math.cos(n.y*2.7+seed*1.7)+.5*Math.sin(n.z*5.3+seed*2.3)*Math.cos(n.x*4.1+seed));
+  v.multiplyScalar(1+d);const t=1-tp*Math.max(0,-n.y);v.x*=sc[0]*t;v.y*=sc[1];v.z*=sc[2]*t;v.x-=bend*v.y*v.y;p.setXYZ(i,v.x,v.y,v.z)}
+ g.computeVertexNormals();return g}
+const part=(g,c,pos=[0,0,0],o)=>{const m=new THREE.Mesh(g,mat(c,o));m.position.set(...pos);return m};
+const tube=(pts,r,c,o)=>new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map(p=>new THREE.Vector3(...p))),56,r,16,false),mat(c,o));
+function anatomy(k){const o=new THREE.Group(),A=(...a)=>o.add(...a);
+ if(k==='liver'){
+  A(part(blob([1.8,.8,1.15],1.3,.06),0x80362a));
+  A(part(blob([.95,.5,.8],2.1,.05,{tp:.3}),0x8a3b2e,[-1.75,-.12,.1]));
+  A(part(blob([.3,.2,.2],0,.04),0x5f8d3b,[.75,-.78,.55]));
+  A(tube([[.1,-.6,.5],[.3,-.3,.2],[.9,.1,-.1],[1.4,.2,-.3]],.09,0x5a4a8a));
+  A(tube([[-.2,-.5,.4],[-.5,-.2,.1],[-1.1,0,0]],.06,0x5a4a8a));
+  A(tube([[0,.7,-.4],[.1,1.1,-.5],[0,1.5,-.5]],.12,0x4f6ea8));
+  A(tube([[.3,-.55,.45],[.55,-.7,.55]],.04,0x6fa14a))}
+ else if(k==='kidney'){
+  A(part(blob([.8,1.45,.62],3.7,.04,{bend:.32}),0x8d3a3b));
+  A(part(blob([.5,.3,.45],1,.03),0xe6c06a,[.1,1.25,.1]));
+  A(tube([[.3,.12,0],[.8,.15,.1],[1.3,.35,.05]],.07,0xc0392b));
+  A(tube([[.3,-.08,0],[.8,-.1,-.1],[1.3,-.25,-.05]],.1,0x4f6ea8));
+  A(tube([[.3,-.25,0],[.65,-.7,0],[.55,-1.6,0]],.05,0xe8c07a))}
+ else if(k==='tumor'){
+  A(part(blob([1,1,1],5.2,.16),0xc9d646,[0,0,0],{roughness:.55}));
+  A(part(blob([.5,.5,.5],2.2,.1),0x4a4a1c,[.1,0,0]));
+  [[[.9,.5,.2],[1.5,1.1,.1],[1.9,1.6,0]],[[-.8,.6,.3],[-1.4,1.1,.4],[-1.9,1.2,.2]],[[0,-.9,.4],[.2,-1.5,.5],[.1,-2,.4]]].forEach(p=>A(tube(p,.07,0xc0392b)))}
+ else{
+  const h=new THREE.Group();
+  h.add(part(blob([.95,1.25,.85],.4,.035,{tp:.62}),0xb23a33));
+  h.add(part(blob([.62,.95,.6],1.9,.03,{tp:.5}),0xc2463d,[.7,-.05,.42]));
+  h.add(part(blob([.42,.4,.38],2.6,.05),0xa5352f,[-.62,.95,-.15]));
+  h.add(part(blob([.5,.48,.42],3.4,.05),0xa5352f,[.85,.8,-.15]));
+  h.add(part(blob([.28,.34,.2],4.1,.05),0xa5352f,[.35,.92,.55]));
+  h.add(tube([[.05,.85,0],[.1,1.45,0],[-.15,1.95,-.05],[-.7,1.65,-.15],[-.8,.9,-.2]],.22,0xd98273));
+  h.add(tube([[.35,.8,.45],[.4,1.35,.4],[.25,1.8,.1]],.17,0x6f8fc9));
+  h.add(tube([[.95,1.25,-.15],[1,.6,-.15],[.95,-.1,-.1]],.14,0x4f6ea8));
+  h.add(tube([[.95,.95,-.2],[.75,1.7,-.3]],.12,0x4f6ea8));
+  [[[-1.1,1.1,-.25],[-.8,.95,-.2]],[[-1.15,.8,-.1],[-.85,.85,-.1]]].forEach(p=>h.add(tube(p,.07,0xd98273)));
+  h.add(tube([[.15,.8,.7],[-.05,.4,.82],[-.12,-.2,.8],[-.1,-.85,.55]],.04,0xf0b44a));
+  h.add(tube([[.2,.75,.65],[.65,.55,.7],[.95,.1,.5],[.85,-.45,.5]],.035,0xf0b44a));
+  h.rotation.z=.35;A(h)}
+ return o}
+ 
+async function load(o){if(cache.has(o))return cache.get(o);
+ const obj=o.demo?anatomy(o.demo):(await new GLTFLoader().parseAsync(o.buf.slice(0),'')).scene;
+ const box=new THREE.Box3().setFromObject(obj),c=box.getCenter(new THREE.Vector3());obj.position.sub(c);
+ const w=new THREE.Group();w.add(obj);w.scale.setScalar(2.4/(box.getSize(new THREE.Vector3()).length()||1));cache.set(o,w);return w}
+async function show(o){try{const m=await load(o);holder.clear();holder.add(m);Object.assign(st,{x:W/2,y:H/2,s:1,cur:o});holder.rotation.set(.15,-.5,0);setLock(false,true);holder.visible=true;layersOf(o).forEach(l=>{l.on=true;l.meshes.forEach(x=>x.visible=true)});buildLayerBtns();toast('Showing '+o.label)}
+ catch(e){console.error(e);toast('Could not load '+o.name)}}
+function hide(){holder.visible=false;st.cur=null;grab=null;$('#qL').innerHTML='';toast('Organ hidden')}
+(function loop(){requestAnimationFrame(loop);const k=wpp();holder.position.set((st.x-W/2)*k,-(st.y-H/2)*k,0);holder.scale.setScalar(st.s);
+ const sel=!!((grab&&grab.t==='o')||md||zoom||rot);if(sel!==loop.s){loop.s=sel;holder.traverse(n=>{if(n.material&&n.material.emissive)n.material.emissive.setHex(sel?0x0e3b4a:0)})}
+ $('#vit').classList.toggle('sel',!!((grab&&grab.t==='p')||pd));renderer.render(scene,cam)})();
+ 
+/* ---------- layers (strip bones, skin, lungs ...) ---------- */
+function layersOf(o){if(o.layers)return o.layers;const g=new Map();
+ cache.get(o).traverse(n=>{if(n.isMesh){const k=(n.name||(n.parent&&n.parent.name)||'part').replace(/_/g,' ');if(!g.has(k))g.set(k,[]);g.get(k).push(n)}});
+ return o.layers=[...g].map(([name,meshes])=>({name,meshes,on:true}))}
+function setLayer(name,on){const o=st.cur;if(!o)return false;const L=layersOf(o).find(l=>l.name===name);if(!L)return false;
+ L.on=on===undefined?!L.on:on;L.meshes.forEach(m=>m.visible=L.on);buildLayerBtns();toast((L.on?'Showing ':'Hiding ')+L.name);return true}
+function buildLayerBtns(){const box=$('#qL');box.innerHTML='';const o=st.cur;if(!o)return;const L=layersOf(o);if(L.length<2)return;
+ L.forEach(l=>{const b=document.createElement('button');b.textContent=l.name+': '+(l.on?'on':'off');b.onclick=()=>setLayer(l.name);box.append(b)})}
+/* ---------- UI helpers ---------- */
+let tt;function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>e.classList.remove('on'),2200)}
+function setLock(v,quiet){st.lock=v;grab=null;$('#lock').textContent=v?'Organ locked':'Organ unlocked';$('#ql').textContent=v?'Unlock':'Lock';if(!quiet)toast(v?'Organ locked in place':'Organ unlocked')}
+const vit=$('#vit');
+function vitals(on){vit.hidden=!on}
+function scaleVit(d){vs=clamp(vs+d,.6,1.8);vit.style.setProperty('--s',vs)}
+function movePanel(x,y){vit.style.left=clamp(x,0,W-80)+'px';vit.style.top=clamp(y,0,H-60)+'px'}
+$('#cl').onclick=()=>vitals(false);$('#sm').onclick=()=>scaleVit(-.15);$('#lg').onclick=()=>scaleVit(.15);
+$('#qh').onclick=hide;$('#qv').onclick=()=>vitals(vit.hidden);$('#ql').onclick=()=>setLock(!st.lock);
+ 
+/* ---------- mouse + keyboard fallback ---------- */
+addEventListener('pointerdown',e=>{if(e.target.closest('#vit .bar')&&!e.target.closest('button')){pd={dx:e.clientX-vit.offsetLeft,dy:e.clientY-vit.offsetTop};return}
+ if(e.target.closest('.ui')||!st.cur||st.lock)return;md={dx:e.clientX-st.x,dy:e.clientY-st.y}});
+addEventListener('pointermove',e=>{if(pd)movePanel(e.clientX-pd.dx,e.clientY-pd.dy);else if(md){st.x=e.clientX-md.dx;st.y=e.clientY-md.dy}});
+addEventListener('pointerup',()=>{md=pd=null});
+addEventListener('wheel',e=>{if(st.cur&&!st.lock&&!e.target.closest('.ui'))st.s=clamp(st.s*(e.deltaY<0?1.08:.92),.3,4)},{passive:true});
+addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;const k=e.key.toLowerCase();if(k==='l')setLock(!st.lock);if(k==='v')vitals(vit.hidden);if(k==='h')hide()});
+ 
+/* ---------- voice ---------- */
+const norm=s=>s.toLowerCase().replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+function lev(a,b){const d=Array.from({length:a.length+1},(_,i)=>[i,...Array(b.length).fill(0)]);for(let j=1;j<=b.length;j++)d[0][j]=j;
+ for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return d[a.length][b.length]}
+function findOrgan(t){const w=t.split(' ');let best=null,bs=9;
+ for(const o of organs){const l=norm(o.label);if(!l)continue;const n=l.split(' ').length,tol=l.length>=7?2:l.length>=4?1:0;
+  for(let i=0;i+n<=w.length;i++){const s=lev(w.slice(i,i+n).join(' '),l);if(s<=tol&&s<bs){bs=s;best=o}}}
+ return best}
+let lastAct='',lastT=0;
+function act(key,fn){const n=performance.now();if(key===lastAct&&n-lastT<1500)return;lastAct=key;lastT=n;fn()}
+function cmd(raw){const t=norm(raw);if(!t)return false;
+ const sw=/\b(show|display|open|load|bring up|pull up|restore|put back|add)\b/.test(t),hw=/\b(hide|close|remove|clear|dismiss|strip|peel|take off|turn off)\b/.test(t);
+ if(/\bvital/.test(t)){if(hw){act('hv',()=>vitals(false));return true}if(sw){act('sv',()=>vitals(true));return true}}
+ if(hw&&/\b(organ|screen|everything|all|model)\b/.test(t)){act('ho',hide);return true}
+ const o=findOrgan(t);
+ if(o&&hw){act('h:'+o.label,()=>st.cur===o?hide():toast(o.label+' is not showing'));return true}
+ if(o&&sw){act('s:'+o.label,()=>show(o));return true}
+ if(st.cur&&(sw||hw)){const L=layersOf(st.cur).find(l=>new RegExp('\\b'+l.name.toLowerCase().replace(/s$/,'')+'s?\\b').test(t)||(/bone/.test(l.name)&&/skelet/.test(t)));
+  if(L){act('l:'+L.name+hw,()=>setLayer(L.name,!hw));return true}}
+ return false}
+const setMic=t=>$('#mic').textContent=t;
+function startVoice(){const R=window.SpeechRecognition||window.webkitSpeechRecognition;
+ $('#quick p').textContent='Say: '+organs.map(o=>'show '+o.label).join(', ')+', hide <name>, show/hide vitals, strip bones. Purse hand = rotate. Mouse: drag, wheel.';
+ if(!R){setMic('Voice needs Chrome. Use the buttons.');return}
+ const r=new R();r.continuous=true;r.interimResults=true;r.maxAlternatives=4;r.lang='en-US';let dead=false;
+ r.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){const res=e.results[i];let ok=false;
+   for(let j=0;j<res.length&&!ok;j++)ok=cmd(res[j].transcript);
+   setMic((ok?'Heard: ':res.isFinal?'No match: ':'Hearing: ')+res[0].transcript.trim());
+   if(res.isFinal&&!ok&&organs[0])toast('Try: "show '+organs[0].label+'", "hide '+organs[0].label+'", "show vitals"')}};
+ r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){dead=true;setMic('Mic blocked. Allow it in the address bar, or use buttons.')}
+  else if(e.error==='network')setMic('Voice needs internet (Chrome uses Google speech).')};
+ r.onend=()=>{if(!dead)setTimeout(()=>{try{r.start()}catch(e){}},300)};
+ try{r.start();setMic('Listening')}catch(e){}}
+ 
+/* ---------- hand tracking ---------- */
+const hands=new Hands({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/'+f});
+hands.setOptions({maxNumHands:2,modelComplexity:1,minDetectionConfidence:.6,minTrackingConfidence:.5});
+hands.onResults(onHands);
+async function startCam(){const v=$('#cam');
+ try{v.srcObject=await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720,facingMode:'user'},audio:false});await v.play();
+  (async function f(){if(v.readyState>=2)try{await hands.send({image:v})}catch(e){}requestAnimationFrame(f)})()}
+ catch(e){$('#hands').textContent='Camera unavailable. Mouse controls active.'}}
+const toScr=l=>{const v=$('#cam'),vw=v.videoWidth||1280,vh=v.videoHeight||720,s=Math.max(W/vw,H/vh);return{x:(W-vw*s)/2+(1-l.x)*vw*s,y:(H-vh*s)/2+l.y*vh*s}};
+function handQ(lm){const v=$('#cam'),vw=v.videoWidth||1280,vh=v.videoHeight||720,V=l=>new THREE.Vector3((1-l.x)*vw,-l.y*vh,l.z*vw);
+ const u=V(lm[9]).sub(V(lm[0])).normalize(),s=V(lm[5]).sub(V(lm[17])).normalize(),n=new THREE.Vector3().crossVectors(s,u).normalize(),s2=new THREE.Vector3().crossVectors(u,n);
+ return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(s2,u,n))}
+function onHands(res){
+ const fx=$('#fx').getContext('2d');fx.clearRect(0,0,W,H);
+ const hs=(res.multiHandLandmarks||[]).map((lm,i)=>{const p=lm.map(toScr),r=dist(p[4],p[8])/(dist(p[0],p[9])||1),was=ps[i];
+  const sz=dist(p[0],p[9])||1,T=[4,8,12,16,20],c=T.reduce((a,k)=>({x:a.x+p[k].x/5,y:a.y+p[k].y/5}),{x:0,y:0}),
+   spread=Math.max(...T.map(k=>dist(p[k],c)))/sz,reach=[[8,5],[12,9],[16,13],[20,17]].every(([t,m])=>dist(p[t],p[0])>1.05*dist(p[m],p[0])),
+   purse=pu[i]=reach&&(pu[i]?spread<PURSE_OFF:spread<PURSE_ON),pinch=ps[i]=!purse&&(was?r<.5:r<.3);
+  const ext=[[8,6],[12,10],[16,14],[20,18]].filter(([t,j])=>dist(p[t],p[0])>dist(p[j],p[0])*1.1).length;
+  return{p,lm,purse,pinch,start:pinch&&!was,pt:{x:(p[4].x+p[8].x)/2,y:(p[4].y+p[8].y)/2},open:ext===4,fist:ext===0&&r>.35}});
+ for(let i=hs.length;i<2;i++)ps[i]=false;
+ $('#hands').textContent=hs.length?'Hands tracked: '+hs.length:'No hands in view. Mouse controls active.';
+ hs.forEach(h=>{[4,8,12,16,20].forEach(i=>{fx.beginPath();fx.arc(h.p[i].x,h.p[i].y,5,0,7);fx.fillStyle=h.purse?'rgba(255,196,80,.95)':'rgba(143,211,232,.85)';fx.fill()});
+  if(h.pinch){fx.beginPath();fx.arc(h.pt.x,h.pt.y,16,0,7);fx.strokeStyle='rgba(255,255,255,.9)';fx.lineWidth=2;fx.stroke()}});
+ const pin=hs.filter(h=>h.pinch);
+ if(pin.length>=2&&st.cur&&!st.lock){ // two hands: spread = zoom, twist = roll, swivel = yaw/pitch
+  const a=pin[0].pt,b=pin[1].pt,d=dist(a,b),ang=Math.atan2(b.y-a.y,b.x-a.x),mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+  if(!zoom)zoom={d0:d,s0:st.s,a0:ang,r0:holder.rotation.clone(),mx,my};
+  grab=null;let da=ang-zoom.a0;da=Math.atan2(Math.sin(da),Math.cos(da));
+  st.s=clamp(zoom.s0*d/zoom.d0,.3,4);
+  holder.rotation.z=zoom.r0.z-da;holder.rotation.y=zoom.r0.y+(mx-zoom.mx)*.008;holder.rotation.x=zoom.r0.x+(my-zoom.my)*.008}
+ else{zoom=null;
+  if(pin.length===1){const h=pin[0];
+   if(!grab){const el=document.elementFromPoint(h.pt.x,h.pt.y),b=el&&el.closest('button');
+    if(b){if(h.start)b.click();grab={t:'x'}}
+    else if(el&&el.closest('#vit'))grab={t:'p',dx:h.pt.x-vit.offsetLeft,dy:h.pt.y-vit.offsetTop};
+    else if(st.cur&&!st.lock&&dist(h.pt,st)<Math.max(150,1.4*st.s/wpp()))grab={t:'o',dx:h.pt.x-st.x,dy:h.pt.y-st.y}}
+   if(grab&&grab.t==='o'){st.x=h.pt.x-grab.dx;st.y=h.pt.y-grab.dy}
+   else if(grab&&grab.t==='p')movePanel(h.pt.x-grab.dx,h.pt.y-grab.dy)}
+  else grab=null}
+ const pr=hs.find(h=>h.purse);
+ if(pr&&st.cur&&!st.lock){const q=handQ(pr.lm);if(!rot){rot={h0:q.clone(),q0:holder.quaternion.clone()};grab=null}
+  tq.copy(q).multiply(rot.h0.clone().invert()).multiply(rot.q0);holder.quaternion.slerp(tq,.4);$('#hands').textContent='Rotating organ'}
+ else rot=null;
+ if(hs.some(h=>h.open))grab=null;
+ if(hs.some(h=>h.fist)){fT??=performance.now();if(!fD&&performance.now()-fT>700){fD=true;setLock(!st.lock)}}else{fT=null;fD=false}
+}
+</script></body></html>
